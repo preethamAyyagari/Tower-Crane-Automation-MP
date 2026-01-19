@@ -5,13 +5,13 @@ from flask import Flask, render_template_string, jsonify, request
 # ==========================================
 #      CONFIGURATION (GPIO PINS)
 # ==========================================
-# Format: [Phase_A_Pin, Phase_B_Pin]
-# Using BCM Numbering (not physical pin numbers)
+# UPDATED MAPPING TO MATCH YOUR PHYSICAL WIRING
+# Format: [Phase_A, Phase_B] using BCM Numbers
 ENCODER_PINS = [
-    [17, 27],  # Encoder 0 (Pins 11, 13)
-    [22, 23],  # Encoder 1 (Pins 15, 16)
-    [24, 25],  # Encoder 2 (Pins 18, 22)
-    [5,  6]    # Encoder 3 (Pins 29, 31)
+    [27, 22],  # Encoder 1: Physical Pins 13 & 15 (GPIO 27, 22)
+    [23, 24],  # Encoder 2: Physical Pins 16 & 18 (GPIO 23, 24)
+    [17, 25],  # Encoder 3: Physical Pins 11 & 22 (GPIO 17, 25)
+    [5,  6]    # Encoder 4: Physical Pins 29 & 31 (GPIO 5, 6)
 ]
 
 app = Flask(__name__)
@@ -34,7 +34,6 @@ class EncoderReader:
         self.pi.set_mode(gpioB, pigpio.INPUT)
 
         # 2. ENABLE INTERNAL PULL-UP (Crucial for Open Collector)
-        # This provides the 3.3V logic 'High' signal safely.
         self.pi.set_pull_up_down(gpioA, pigpio.PUD_UP)
         self.pi.set_pull_up_down(gpioB, pigpio.PUD_UP)
 
@@ -49,7 +48,9 @@ class EncoderReader:
         else:
             self.levB = level
 
-        if gpio != self.lastGpio: # Simple Debounce
+        # --- TESTING MODE (Switch Debounce Bypass) ---
+        # Change 'True' to 'gpio != self.lastGpio' when connecting real encoders!
+        if True: 
             self.lastGpio = gpio
             if gpio == self.gpioA and level == 1:
                 if self.levB == 1: self.pos += 1
