@@ -9,7 +9,7 @@ from flask import Flask, render_template_string, jsonify, request
 # Format: [Phase_A, Phase_B] using BCM Numbers
 ENCODER_PINS = [
     [27, 22],  # Encoder 1: Physical Pins 13 & 15 (GPIO 27, 22)
-    [23, 24],  # Encoder 2: Physical Pins 16 & 18 (GPIO 23, 24)
+    [20, 21],  # Encoder 2: Physical Pins 38 & 40 (GPIO 20, 21)
     [17, 25],  # Encoder 3: Physical Pins 11 & 22 (GPIO 17, 25)
     [5,  6]    # Encoder 4: Physical Pins 29 & 31 (GPIO 5, 6)
 ]
