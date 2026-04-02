@@ -3,6 +3,8 @@ import time
 import threading
 import os
 import sys
+import random
+import math
 from flask import Flask, render_template_string, jsonify, request
 
 # ==========================================
@@ -23,7 +25,18 @@ ENCODER_PINS = [
 app = Flask(__name__)
 
 # ==========================================
-#      HARDWARE DRIVER
+#      AUTO-DETECT ENVIRONMENT
+# ==========================================
+pi = pigpio.pi()
+SIMULATION_MODE = not pi.connected
+
+if SIMULATION_MODE:
+    print("⚠️ HARDWARE NOT DETECTED: Starting in SIMULATION MODE for GUI Testing...")
+else:
+    print("✅ HARDWARE DETECTED: Starting in REAL HARDWARE MODE...")
+
+# ==========================================
+#      HARDWARE DRIVER (REAL)
 # ==========================================
 class FastCraneHardware:
     def __init__(self):
@@ -115,7 +128,7 @@ class FastCraneHardware:
         return res
 
 # ==========================================
-#      ENCODER LOGIC (WITH DIGITAL SHIELD)
+#      ENCODER LOGIC (REAL WITH DIGITAL SHIELD)
 # ==========================================
 class EncoderReader:
     def __init__(self, pi, gpioA, gpioB):
@@ -156,73 +169,293 @@ class EncoderReader:
     def reset(self): self.pos = 0
 
 # ==========================================
-#      MAIN LOOP
+#      MOCK CLASSES (FOR SIMULATION ONLY)
 # ==========================================
-pi = pigpio.pi()
-if not pi.connected: exit()
+class MockHardware:
+    def __init__(self):
+        self.voltages = [0.0] * 5
+    def set_voltage_fast(self, ch, volts):
+        if 0 <= ch < len(self.voltages): self.voltages[ch] = float(volts)
+    def read_adcs_safe(self):
+        t = time.time()
+        return [round(2.0 + math.sin(t + i) * 0.5 + random.uniform(-0.02, 0.02), 3) for i in range(5)]
 
-hw = FastCraneHardware()
-encoders = [EncoderReader(pi, p[0], p[1]) for p in ENCODER_PINS]
+class MockEncoderReader:
+    def __init__(self): self.pos = 0
+    def reset(self): self.pos = 0
+
+# ==========================================
+#      INITIALIZATION & STATE TRACKING
+# ==========================================
+if SIMULATION_MODE:
+    hw = MockHardware()
+    encoders = [MockEncoderReader() for _ in range(4)]
+else:
+    hw = FastCraneHardware()
+    encoders = [EncoderReader(pi, p[0], p[1]) for p in ENCODER_PINS]
+
 targets = [None] * 5 
+current_dac = [0.0] * 5  
 
 def control_loop():
     while True:
         for i in range(4):
+            # Simulation movement mechanics
+            if SIMULATION_MODE:
+                v = hw.voltages[i]
+                if abs(v) > 0.1: encoders[i].pos += int(v * 2)
+
             t = targets[i]
             if t is not None:
-                if abs(encoders[i].pos - t) <= 5:
+                # Dynamic margin for simulation speed, tight margin for real hardware
+                margin = max(5, abs(int(hw.voltages[i] * 2))) if SIMULATION_MODE else 5
+                
+                if abs(encoders[i].pos - t) <= margin:
                     hw.set_voltage_fast(i, 0.0)
+                    current_dac[i] = 0.0  
                     targets[i] = None
+                    if SIMULATION_MODE: encoders[i].pos = t # Snap to target for clean mock readout
                     print(f"✅ STOP CH {i} @ {encoders[i].pos}")
-        time.sleep(0.005)
+                    
+        time.sleep(0.01 if SIMULATION_MODE else 0.005)
 
 threading.Thread(target=control_loop, daemon=True).start()
 
 # ==========================================
-#      WEB UI
+#      WEB UI (UPDATED WITH GRIDS & TIME X-AXIS)
 # ==========================================
 HTML_PAGE = """
 <!DOCTYPE html>
 <html>
 <head>
-    <title>Crane Final Shielded</title>
+    <title>Crane Advanced Interface</title>
     <meta name="viewport" content="width=device-width, initial-scale=1">
+    
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <script src="https://html2canvas.hertzen.com/dist/html2canvas.min.js"></script>
+    
     <style>
-        body { font-family: sans-serif; background: #222; color: #fff; text-align: center; }
-        .box { display: inline-block; background: #333; margin: 10px; padding: 15px; border-radius: 8px; width: 260px; border: 1px solid #555; }
-        .data { font-size: 24px; font-family: monospace; color: #0f0; margin: 10px 0; display: flex; justify-content: space-between; }
-        input { font-size: 18px; width: 80px; text-align: center; padding: 5px; }
-        button { font-size: 16px; padding: 10px; width: 100%; margin-top: 5px; cursor: pointer; border: none; border-radius: 4px;}
-        .go { background: #27ae60; color: white; }
-        .stop { background: #c0392b; color: white; font-size: 20px; font-weight: bold; }
-        .rst { background: #7f8c8d; color: white; }
+        body { font-family: 'Segoe UI', sans-serif; background: #1e272e; color: #d2dae2; text-align: center; margin: 0; padding: 20px;}
+        
+        .top-bar { display: flex; justify-content: center; gap: 20px; margin-bottom: 30px; }
+        .top-btn { padding: 12px 24px; font-size: 16px; font-weight: bold; cursor: pointer; border: none; border-radius: 6px; color: white; transition: 0.2s;}
+        #pauseBtn { background: #f39c12; }
+        #snapBtn { background: #8e44ad; }
+        
+        h1 { margin: 0 0 10px 0; color: #ecf0f1; }
+        .section-title { text-align: left; padding-left: 20px; color: #0fb9b1; border-bottom: 2px solid #34495e; margin-top: 20px; padding-bottom: 5px; }
+        
+        .grid-container { display: flex; flex-wrap: wrap; justify-content: center; gap: 20px; margin-bottom: 30px; }
+        .box { background: #2c3e50; padding: 15px; border-radius: 8px; width: 320px; border: 1px solid #485460; box-shadow: 0 4px 6px rgba(0,0,0,0.3); }
+        
+        h3 { color: #3498db; margin: 0 0 10px 0; text-align: left; border-bottom: 1px solid #485460; padding-bottom: 5px;}
+        
+        .data { font-size: 24px; font-family: monospace; font-weight: bold; margin: 10px 0; display: flex; justify-content: space-between; align-items: center;}
+        .adc-val { color: #2ecc71; }
+        .enc-val { color: #f1c40f; }
+        
+        .chart-container { height: 140px; width: 100%; margin-bottom: 10px; background: #1e272e; border-radius: 4px; padding: 5px; box-sizing: border-box;}
+        canvas { width: 100% !important; height: 100% !important; }
+        
+        .chart-tools { display: flex; justify-content: space-between; margin-bottom: 15px; }
+        .tool-btn { background: #485460; color: white; border: none; border-radius: 4px; padding: 5px 10px; font-size: 12px; cursor: pointer; }
+        .tool-btn:hover { background: #576574; }
+        .active-scale { background: #0fb9b1 !important; color: white !important; font-weight: bold; }
+        
+        .inputs { display: flex; justify-content: space-between; gap: 8px; margin-top: 10px; }
+        input { font-size: 16px; width: 45%; text-align: center; padding: 8px; border-radius: 4px; border: 1px solid #485460; background: #d2dae2; color: #1e272e; font-weight: bold;}
+        
+        button { font-size: 16px; font-weight: bold; padding: 10px; width: 100%; margin-top: 8px; cursor: pointer; border: none; border-radius: 4px;}
+        .go { background: #20bf6b; color: white; }
+        .stop { background: #eb3b5a; color: white; }
+        .rst { background: #778ca3; color: white; }
     </style>
+</head>
+<body id="main-body">
+    
+    <h1>Crane Control Dashboard</h1>
+    
+    <div class="top-bar" data-html2canvas-ignore>
+        <button id="pauseBtn" class="top-btn" onclick="togglePause()">⏸ Pause Plotting</button>
+        <button id="snapBtn" class="top-btn" onclick="takeFullScreenshot()">📸 Save Entire Window</button>
+    </div>
+
+    <h2 class="section-title">📡 Analog IN (Sensors)</h2>
+    <div class="grid-container">
+        {% for i in range(5) %}
+        <div class="box" id="adcBox_{{ i }}">
+            <h3>CH {{ i }} ADC Reading</h3>
+            <div class="data">
+                <span>Signal:</span>
+                <span id="a{{ i }}" class="adc-val">0.000V</span>
+            </div>
+            <div class="chart-container"><canvas id="adcChart_{{ i }}"></canvas></div>
+            <div class="chart-tools" data-html2canvas-ignore>
+                <button class="tool-btn" onclick="toggleAutoScale('adc', {{ i }}, this)">↕ Auto-Scale: OFF</button>
+                <button class="tool-btn" onclick="saveSingleBox('adcBox_{{ i }}', 'CH{{ i }}_ADC_Graph')">💾 Save Graph</button>
+            </div>
+        </div>
+        {% endfor %}
+    </div>
+
+    <h2 class="section-title">⚙️ Analog OUT (Motors & Control)</h2>
+    <div class="grid-container">
+        {% for i in range(5) %}
+        <div class="box" id="dacBox_{{ i }}">
+            <h3>CH {{ i }} DAC Command</h3>
+            <div class="data">
+                <span style="color:#eb3b5a">Voltage Out</span>
+                {% if i<4 %}<span id="e{{ i }}" class="enc-val">Pos: 0</span>{% else %}<span class="enc-val">MAN</span>{% endif %}
+            </div>
+            
+            <div class="chart-container"><canvas id="dacChart_{{ i }}"></canvas></div>
+            
+            <div class="chart-tools" data-html2canvas-ignore>
+                <button class="tool-btn" onclick="toggleAutoScale('dac', {{ i }}, this)">↕ Auto-Scale: OFF</button>
+                <button class="tool-btn" onclick="saveSingleBox('dacBox_{{ i }}', 'CH{{ i }}_DAC_Graph')">💾 Save Graph</button>
+            </div>
+            
+            <div class="inputs" data-html2canvas-ignore>
+                <input id="v{{ i }}" type="number" step="0.1" value="2.0" title="Voltage (V)">
+                {% if i<4 %}<input id="t{{ i }}" type="number" step="100" value="1000" title="Target Steps">{% endif %}
+            </div>
+            
+            <button class="go" data-html2canvas-ignore onclick="post('/cmd', {id:{{ i }}, v:document.getElementById('v{{ i }}').value, t:document.getElementById('t{{ i }}') ? document.getElementById('t{{ i }}').value : null})">GO</button>
+            <button class="stop" data-html2canvas-ignore onclick="post('/stop', {id:{{ i }}})">STOP</button>
+            {% if i<4 %}<button class="rst" data-html2canvas-ignore onclick="post('/zero', {id:{{ i }}})">Zero Encoder</button>{% endif %}
+        </div>
+        {% endfor %}
+    </div>
+
     <script>
+        let isPaused = false;
+        const MAX_POINTS = 40; 
+        const charts = { adc: [], dac: [] };
+        const startTime = Date.now(); // Record start time for X-axis
+
+        // Default chart configuration with grids and time axis
+        function getChartConfig(colorCode) {
+            return {
+                type: 'line',
+                data: { labels: Array(MAX_POINTS).fill(''), datasets: [{ data: Array(MAX_POINTS).fill(null), borderColor: colorCode }] },
+                options: {
+                    responsive: true, maintainAspectRatio: false, animation: false,
+                    plugins: { legend: { display: false }, tooltip: { enabled: false } },
+                    scales: { 
+                        x: { 
+                            display: true, 
+                            title: { display: true, text: 'Time (s)', color: '#aaa', font: {size: 10} },
+                            grid: { color: 'rgba(255, 255, 255, 0.1)' },
+                            ticks: { color: '#aaa', maxRotation: 0, autoSkip: true, maxTicksLimit: 8 }
+                        }, 
+                        y: { 
+                            min: -10.5, max: 10.5, 
+                            grid: { color: 'rgba(255, 255, 255, 0.1)' },
+                            ticks: { color: '#aaa', stepSize: 5 } 
+                        } 
+                    },
+                    elements: { point: { radius: 0 }, line: { borderWidth: 2, tension: 0.1 } }
+                }
+            };
+        }
+
+        // Initialize all charts
+        for (let i = 0; i < 5; i++) {
+            let ctxA = document.getElementById('adcChart_' + i).getContext('2d');
+            charts.adc.push(new Chart(ctxA, getChartConfig('#2ecc71'))); 
+
+            let ctxD = document.getElementById('dacChart_' + i).getContext('2d');
+            charts.dac.push(new Chart(ctxD, getChartConfig('#eb3b5a'))); 
+        }
+
+        // --- BUTTON ACTIONS ---
+
+        function toggleAutoScale(type, index, btnElement) {
+            let targetChart = charts[type][index];
+            let scales = targetChart.options.scales.y;
+            
+            if (scales.min !== undefined) {
+                // Turn Auto-Scale ON
+                delete scales.min;
+                delete scales.max;
+                btnElement.innerText = "↕ Auto-Scale: ON";
+                btnElement.classList.add("active-scale");
+            } else {
+                // Turn Auto-Scale OFF
+                scales.min = -10.5;
+                scales.max = 10.5;
+                btnElement.innerText = "↕ Auto-Scale: OFF";
+                btnElement.classList.remove("active-scale");
+            }
+            targetChart.update();
+        }
+
+        function togglePause() {
+            isPaused = !isPaused;
+            let btn = document.getElementById('pauseBtn');
+            if (isPaused) {
+                btn.innerText = "▶ Resume Plotting"; btn.style.background = "#20bf6b";
+            } else {
+                btn.innerText = "⏸ Pause Plotting"; btn.style.background = "#f39c12";
+            }
+        }
+
+        function takeFullScreenshot() {
+            html2canvas(document.body, { backgroundColor: '#1e272e' }).then(canvas => {
+                let a = document.createElement('a');
+                a.href = canvas.toDataURL("image/png");
+                a.download = "crane_full_dashboard.png";
+                a.click();
+            });
+        }
+
+        function saveSingleBox(boxId, fileName) {
+            let boxElement = document.getElementById(boxId);
+            html2canvas(boxElement, { backgroundColor: '#2c3e50', scale: 2 }).then(canvas => {
+                let a = document.createElement('a');
+                a.href = canvas.toDataURL("image/png");
+                a.download = fileName + ".png";
+                a.click();
+            });
+        }
+
+        function post(url, data) { fetch(url, {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(data)}); }
+
+        // --- FETCH & UPDATE LOOP ---
         setInterval(() => {
             fetch('/data').then(r=>r.json()).then(d=>{
-                d.adc.forEach((v,i)=>document.getElementById('a'+i).innerText=v.toFixed(3)+'V');
-                d.enc.forEach((v,i)=>{if(document.getElementById('e'+i))document.getElementById('e'+i).innerText=v});
-            });
+                
+                // Calculate elapsed time in seconds for the X-axis label
+                let elapsedSecs = ((Date.now() - startTime) / 1000).toFixed(1);
+
+                d.adc.forEach((v, i) => {
+                    // Update Text Displays
+                    document.getElementById('a'+i).innerText = v.toFixed(3) + 'V';
+                    if (document.getElementById('e'+i) && d.enc[i] !== undefined) {
+                        document.getElementById('e'+i).innerText = "Pos: " + d.enc[i];
+                    }
+                    
+                    if (!isPaused) {
+                        // Update Labels (Time)
+                        charts.adc[i].data.labels.shift();
+                        charts.adc[i].data.labels.push(elapsedSecs);
+                        charts.dac[i].data.labels.shift();
+                        charts.dac[i].data.labels.push(elapsedSecs);
+
+                        // Update ADC Data
+                        charts.adc[i].data.datasets[0].data.shift();
+                        charts.adc[i].data.datasets[0].data.push(v);
+                        charts.adc[i].update();
+                        
+                        // Update DAC Data
+                        charts.dac[i].data.datasets[0].data.shift();
+                        charts.dac[i].data.datasets[0].data.push(d.dac[i]);
+                        charts.dac[i].update();
+                    }
+                });
+            }).catch(e => console.log("Connection Error (Waiting for server...)"));
         }, 250);
-        function post(url, data) { fetch(url, {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(data)}); }
     </script>
-</head>
-<body>
-    <h1>Crane Controller (Shielded)</h1>
-    {% for i in range(5) %}
-    <div class="box">
-        <h2 style="color:#3498db; margin:0">CH {{ i }}</h2>
-        <div class="data">
-            <span id="a{{ i }}">0.000V</span>
-            {% if i<4 %}<span id="e{{ i }}" style="color:#f1c40f">0</span>{% else %}<span>MAN</span>{% endif %}
-        </div>
-        <input id="v{{ i }}" type="number" step="0.1" value="2.0">
-        {% if i<4 %}<input id="t{{ i }}" type="number" step="100" value="1000">{% endif %}
-        <button class="go" onclick="post('/cmd', {id:{{ i }}, v:document.getElementById('v{{ i }}').value, t:document.getElementById('t{{ i }}').value})">GO</button>
-        <button class="stop" onclick="post('/stop', {id:{{ i }}})">STOP</button>
-        {% if i<4 %}<button class="rst" onclick="post('/zero', {id:{{ i }}})">Zero</button>{% endif %}
-    </div>
-    {% endfor %}
 </body>
 </html>
 """
@@ -231,13 +464,15 @@ HTML_PAGE = """
 def index(): return render_template_string(HTML_PAGE)
 
 @app.route('/data')
-def data(): return jsonify(adc=hw.read_adcs_safe(), enc=[e.pos for e in encoders])
+def data(): return jsonify(adc=hw.read_adcs_safe(), enc=[e.pos for e in encoders], dac=current_dac)
 
 @app.route('/cmd', methods=['POST'])
 def cmd():
     d = request.json
     i = int(d['id'])
-    hw.set_voltage_fast(i, float(d['v']))
+    v = float(d['v'])
+    hw.set_voltage_fast(i, v)
+    current_dac[i] = v  
     if i < 4 and d.get('t'): targets[i] = int(d['t'])
     return jsonify(ok=True)
 
@@ -245,6 +480,7 @@ def cmd():
 def stop():
     i = int(request.json['id'])
     hw.set_voltage_fast(i, 0.0)
+    current_dac[i] = 0.0 
     targets[i] = None
     return jsonify(ok=True)
 

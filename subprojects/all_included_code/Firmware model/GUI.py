@@ -38,7 +38,7 @@ class ChannelWidget(QGroupBox):
         data_layout.addWidget(self.enc_label)
         layout.addLayout(data_layout)
         
-        # --- Graph Plots ---
+        # Graph Plots
         # 1. Analog IN (ADC) Plot
         self.adc_plot_widget = pg.PlotWidget(title="Analog IN (ADC)")
         self.adc_plot_widget.setBackground('#34495e')
@@ -64,7 +64,7 @@ class ChannelWidget(QGroupBox):
         self.start_time = time.time()
         self.current_dac_out = 0.0 # Track commanded voltage
         
-        # --- Inputs ---
+        # Inputs
         input_layout = QHBoxLayout()
         
         self.voltage_input = QDoubleSpinBox()
@@ -83,7 +83,7 @@ class ChannelWidget(QGroupBox):
             
         layout.addLayout(input_layout)
         
-        # --- Buttons ---
+        # Buttons 
         self.go_btn = QPushButton("GO")
         self.go_btn.setStyleSheet("background-color: #27ae60; color: white; font-weight: bold; padding: 8px;")
         self.go_btn.clicked.connect(self.send_go)
