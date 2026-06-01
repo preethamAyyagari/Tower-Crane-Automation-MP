@@ -222,7 +222,7 @@ def control_loop():
 threading.Thread(target=control_loop, daemon=True).start()
 
 # ==========================================
-#      WEB UI (UPDATED WITH GRIDS & TIME X-AXIS)
+#      WEB UI (UPDATED CUSTOM CHANNELS)
 # ==========================================
 HTML_PAGE = """
 <!DOCTYPE html>
@@ -282,17 +282,17 @@ HTML_PAGE = """
 
     <h2 class="section-title">📡 Analog IN (Sensors)</h2>
     <div class="grid-container">
-        {% for i in range(5) %}
-        <div class="box" id="adcBox_{{ i }}">
-            <h3>CH {{ i }} ADC Reading</h3>
+        {% for ch, name in adc_channels %}
+        <div class="box" id="adcBox_{{ ch }}">
+            <h3>CH {{ ch }} - {{ name }}</h3>
             <div class="data">
                 <span>Signal:</span>
-                <span id="a{{ i }}" class="adc-val">0.000V</span>
+                <span id="a{{ ch }}" class="adc-val">0.000V</span>
             </div>
-            <div class="chart-container"><canvas id="adcChart_{{ i }}"></canvas></div>
+            <div class="chart-container"><canvas id="adcChart_{{ ch }}"></canvas></div>
             <div class="chart-tools" data-html2canvas-ignore>
-                <button class="tool-btn" onclick="toggleAutoScale('adc', {{ i }}, this)">↕ Auto-Scale: OFF</button>
-                <button class="tool-btn" onclick="saveSingleBox('adcBox_{{ i }}', 'CH{{ i }}_ADC_Graph')">💾 Save Graph</button>
+                <button class="tool-btn" onclick="toggleAutoScale('adc', {{ ch }}, this)">↕ Auto-Scale: OFF</button>
+                <button class="tool-btn" onclick="saveSingleBox('adcBox_{{ ch }}', '{{ name }}_Graph')">💾 Save Graph</button>
             </div>
         </div>
         {% endfor %}
@@ -300,29 +300,29 @@ HTML_PAGE = """
 
     <h2 class="section-title">⚙️ Analog OUT (Motors & Control)</h2>
     <div class="grid-container">
-        {% for i in range(5) %}
-        <div class="box" id="dacBox_{{ i }}">
-            <h3>CH {{ i }} DAC Command</h3>
+        {% for ch, name in dac_channels %}
+        <div class="box" id="dacBox_{{ ch }}">
+            <h3>CH {{ ch }} - {{ name }}</h3>
             <div class="data">
                 <span style="color:#eb3b5a">Voltage Out</span>
-                {% if i<4 %}<span id="e{{ i }}" class="enc-val">Pos: 0</span>{% else %}<span class="enc-val">MAN</span>{% endif %}
+                <span id="e{{ ch }}" class="enc-val">Pos: 0</span>
             </div>
             
-            <div class="chart-container"><canvas id="dacChart_{{ i }}"></canvas></div>
+            <div class="chart-container"><canvas id="dacChart_{{ ch }}"></canvas></div>
             
             <div class="chart-tools" data-html2canvas-ignore>
-                <button class="tool-btn" onclick="toggleAutoScale('dac', {{ i }}, this)">↕ Auto-Scale: OFF</button>
-                <button class="tool-btn" onclick="saveSingleBox('dacBox_{{ i }}', 'CH{{ i }}_DAC_Graph')">💾 Save Graph</button>
+                <button class="tool-btn" onclick="toggleAutoScale('dac', {{ ch }}, this)">↕ Auto-Scale: OFF</button>
+                <button class="tool-btn" onclick="saveSingleBox('dacBox_{{ ch }}', '{{ name }}_Graph')">💾 Save Graph</button>
             </div>
             
             <div class="inputs" data-html2canvas-ignore>
-                <input id="v{{ i }}" type="number" step="0.1" value="2.0" title="Voltage (V)">
-                {% if i<4 %}<input id="t{{ i }}" type="number" step="100" value="1000" title="Target Steps">{% endif %}
+                <input id="v{{ ch }}" type="number" step="0.1" value="2.0" title="Voltage (V)">
+                <input id="t{{ ch }}" type="number" step="100" value="1000" title="Target Steps">
             </div>
             
-            <button class="go" data-html2canvas-ignore onclick="post('/cmd', {id:{{ i }}, v:document.getElementById('v{{ i }}').value, t:document.getElementById('t{{ i }}') ? document.getElementById('t{{ i }}').value : null})">GO</button>
-            <button class="stop" data-html2canvas-ignore onclick="post('/stop', {id:{{ i }}})">STOP</button>
-            {% if i<4 %}<button class="rst" data-html2canvas-ignore onclick="post('/zero', {id:{{ i }}})">Zero Encoder</button>{% endif %}
+            <button class="go" data-html2canvas-ignore onclick="post('/cmd', {id:{{ ch }}, v:document.getElementById('v{{ ch }}').value, t:document.getElementById('t{{ ch }}').value})">GO</button>
+            <button class="stop" data-html2canvas-ignore onclick="post('/stop', {id:{{ ch }}})">STOP</button>
+            <button class="rst" data-html2canvas-ignore onclick="post('/zero', {id:{{ ch }}})">Zero Encoder</button>
         </div>
         {% endfor %}
     </div>
@@ -330,10 +330,9 @@ HTML_PAGE = """
     <script>
         let isPaused = false;
         const MAX_POINTS = 40; 
-        const charts = { adc: [], dac: [] };
-        const startTime = Date.now(); // Record start time for X-axis
+        const charts = { adc: {}, dac: {} }; // Using objects for specific ID tracking
+        const startTime = Date.now(); 
 
-        // Default chart configuration with grids and time axis
         function getChartConfig(colorCode) {
             return {
                 type: 'line',
@@ -359,31 +358,27 @@ HTML_PAGE = """
             };
         }
 
-        // Initialize all charts
-        for (let i = 0; i < 5; i++) {
-            let ctxA = document.getElementById('adcChart_' + i).getContext('2d');
-            charts.adc.push(new Chart(ctxA, getChartConfig('#2ecc71'))); 
+        // Only initialize charts if the DOM elements exist
+        [0, 1, 2, 3, 4].forEach(i => {
+            let ctxA = document.getElementById('adcChart_' + i);
+            if (ctxA) charts.adc[i] = new Chart(ctxA.getContext('2d'), getChartConfig('#2ecc71'));
 
-            let ctxD = document.getElementById('dacChart_' + i).getContext('2d');
-            charts.dac.push(new Chart(ctxD, getChartConfig('#eb3b5a'))); 
-        }
+            let ctxD = document.getElementById('dacChart_' + i);
+            if (ctxD) charts.dac[i] = new Chart(ctxD.getContext('2d'), getChartConfig('#eb3b5a'));
+        });
 
         // --- BUTTON ACTIONS ---
-
         function toggleAutoScale(type, index, btnElement) {
             let targetChart = charts[type][index];
-            let scales = targetChart.options.scales.y;
+            if (!targetChart) return;
             
+            let scales = targetChart.options.scales.y;
             if (scales.min !== undefined) {
-                // Turn Auto-Scale ON
-                delete scales.min;
-                delete scales.max;
+                delete scales.min; delete scales.max;
                 btnElement.innerText = "↕ Auto-Scale: ON";
                 btnElement.classList.add("active-scale");
             } else {
-                // Turn Auto-Scale OFF
-                scales.min = -10.5;
-                scales.max = 10.5;
+                scales.min = -10.5; scales.max = 10.5;
                 btnElement.innerText = "↕ Auto-Scale: OFF";
                 btnElement.classList.remove("active-scale");
             }
@@ -424,36 +419,35 @@ HTML_PAGE = """
         // --- FETCH & UPDATE LOOP ---
         setInterval(() => {
             fetch('/data').then(r=>r.json()).then(d=>{
-                
-                // Calculate elapsed time in seconds for the X-axis label
                 let elapsedSecs = ((Date.now() - startTime) / 1000).toFixed(1);
 
                 d.adc.forEach((v, i) => {
-                    // Update Text Displays
-                    document.getElementById('a'+i).innerText = v.toFixed(3) + 'V';
-                    if (document.getElementById('e'+i) && d.enc[i] !== undefined) {
-                        document.getElementById('e'+i).innerText = "Pos: " + d.enc[i];
-                    }
+                    // Only update DOM elements that actually exist
+                    let adcLabel = document.getElementById('a'+i);
+                    if (adcLabel) adcLabel.innerText = v.toFixed(3) + 'V';
+                    
+                    let encLabel = document.getElementById('e'+i);
+                    if (encLabel && d.enc[i] !== undefined) encLabel.innerText = "Pos: " + d.enc[i];
                     
                     if (!isPaused) {
-                        // Update Labels (Time)
-                        charts.adc[i].data.labels.shift();
-                        charts.adc[i].data.labels.push(elapsedSecs);
-                        charts.dac[i].data.labels.shift();
-                        charts.dac[i].data.labels.push(elapsedSecs);
-
-                        // Update ADC Data
-                        charts.adc[i].data.datasets[0].data.shift();
-                        charts.adc[i].data.datasets[0].data.push(v);
-                        charts.adc[i].update();
+                        if (charts.adc[i]) {
+                            charts.adc[i].data.labels.shift();
+                            charts.adc[i].data.labels.push(elapsedSecs);
+                            charts.adc[i].data.datasets[0].data.shift();
+                            charts.adc[i].data.datasets[0].data.push(v);
+                            charts.adc[i].update();
+                        }
                         
-                        // Update DAC Data
-                        charts.dac[i].data.datasets[0].data.shift();
-                        charts.dac[i].data.datasets[0].data.push(d.dac[i]);
-                        charts.dac[i].update();
+                        if (charts.dac[i]) {
+                            charts.dac[i].data.labels.shift();
+                            charts.dac[i].data.labels.push(elapsedSecs);
+                            charts.dac[i].data.datasets[0].data.shift();
+                            charts.dac[i].data.datasets[0].data.push(d.dac[i]);
+                            charts.dac[i].update();
+                        }
                     }
                 });
-            }).catch(e => console.log("Connection Error (Waiting for server...)"));
+            }).catch(e => console.log("Connection Error..."));
         }, 250);
     </script>
 </body>
@@ -461,7 +455,11 @@ HTML_PAGE = """
 """
 
 @app.route('/')
-def index(): return render_template_string(HTML_PAGE)
+def index():
+    # Pass the custom mapping to Jinja
+    adc_mapping = [(0, 'Sensor Alpha'), (1, 'Sensor Beta'), (2, 'Sensor Hook'), (4, 'Tilt')]
+    dac_mapping = [(0, 'Spin Control'), (1, 'Trolley'), (2, 'Hook'), (3, 'Tilt')]
+    return render_template_string(HTML_PAGE, adc_channels=adc_mapping, dac_channels=dac_mapping)
 
 @app.route('/data')
 def data(): return jsonify(adc=hw.read_adcs_safe(), enc=[e.pos for e in encoders], dac=current_dac)
