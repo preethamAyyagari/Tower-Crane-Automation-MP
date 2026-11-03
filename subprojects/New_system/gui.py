@@ -11,9 +11,11 @@ HTML_TEMPLATE = """
     <style>
         body { font-family: 'Segoe UI', monospace; background: #1a1e24; color: #d2dae2; margin: 0; padding: 20px; }
         h1 { color: #ecf0f1; text-align: center; margin-bottom: 20px; }
-        .top-status { display: flex; justify-content: center; gap: 20px; align-items: center; margin-bottom: 20px; }
+        .top-status { display: flex; justify-content: center; gap: 15px; align-items: center; margin-bottom: 20px; flex-wrap: wrap;}
         .badge { padding: 8px 16px; border-radius: 6px; font-weight: bold; background: #2c3e50; }
         .badge.active { background: #20bf6b; color: white; }
+        .badge.logging { background: #e84118; color: white; animation: blink 1.5s infinite; }
+        @keyframes blink { 0% { opacity: 1; } 50% { opacity: 0.5; } 100% { opacity: 1; } }
         .section-header { border-bottom: 2px solid #34495e; color: #0fb9b1; padding-bottom: 6px; margin: 25px 0 15px 0; font-size: 1.1rem; }
         .grid { display: flex; flex-wrap: wrap; gap: 15px; justify-content: center; }
         .card { background: #242c35; border: 1px solid #3a4754; border-radius: 8px; width: 310px; padding: 15px; box-shadow: 0 4px 6px rgba(0,0,0,0.3); }
@@ -31,14 +33,18 @@ HTML_TEMPLATE = """
         .btn-stop { background: #eb3b5a; color: white; }
         .btn-rst { background: #576574; color: white; }
         .btn-toggle { background: #3498db; color: white; }
+        .btn-log-start { background: #e84118; color: white; }
+        .btn-log-stop { background: #718093; color: white; }
     </style>
 </head>
 <body>
     <h1>Crane Telemetry & USB Monitor</h1>
 
     <div class="top-status">
-        <div id="joyBadge" class="badge">🕹️ Joystick Control: Ready</div>
+        <div id="joyBadge" class="badge">🕹️ Joystick: Ready</div>
         <button class="btn-toggle" onclick="toggleJoystick()">Toggle Joystick Auto-Control</button>
+        <div id="logBadge" class="badge">📁 Logger: Idle</div>
+        <button id="logBtn" class="btn-log-start" onclick="toggleLogging()">⏺ Start SQL Logging</button>
     </div>
 
     <div class="section-header">📡 Analog Sensor Readings (CN0554 AD7124)</div>
@@ -92,8 +98,8 @@ HTML_TEMPLATE = """
         const dacCharts = {};
         const MAX_POINTS = 30;
         let joyEnabled = true;
+        let isLoggingActive = false;
 
-        // Dynamic auto-scaling chart options
         function createAutoChart(ctx, borderColor) {
             return new Chart(ctx, {
                 type: 'line',
@@ -108,7 +114,6 @@ HTML_TEMPLATE = """
                     plugins: { legend: { display: false } },
                     scales: { 
                         y: { 
-                            // Auto-scaling active: no fixed min or max
                             grid: { color: 'rgba(255, 255, 255, 0.08)' },
                             ticks: { color: '#aaa', font: { size: 10 } }
                         }, 
@@ -119,13 +124,11 @@ HTML_TEMPLATE = """
             });
         }
 
-        // Initialize ADC Charts (Green)
         document.querySelectorAll("[id^='adcChart-']").forEach(canvas => {
             const id = canvas.id.split('-')[1];
             adcCharts[id] = createAutoChart(canvas.getContext('2d'), '#2ecc71');
         });
 
-        // Initialize DAC Charts (Red)
         document.querySelectorAll("[id^='dacChart-']").forEach(canvas => {
             const id = canvas.id.split('-')[1];
             dacCharts[id] = createAutoChart(canvas.getContext('2d'), '#eb3b5a');
@@ -146,9 +149,31 @@ HTML_TEMPLATE = """
             post('/toggle_joy', {enabled: joyEnabled});
         }
 
+        function toggleLogging() {
+            isLoggingActive = !isLoggingActive;
+            fetch('/toggle_log', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({logging: isLoggingActive})
+            }).then(r => r.json()).then(res => {
+                const btn = document.getElementById('logBtn');
+                const badge = document.getElementById('logBadge');
+                if (res.logging) {
+                    btn.innerText = "⏹ Stop SQL Logging";
+                    btn.className = "btn-log-stop";
+                    badge.innerText = "📁 Recording to DB...";
+                    badge.className = "badge logging";
+                } else {
+                    btn.innerText = "⏺ Start SQL Logging";
+                    btn.className = "btn-log-start";
+                    badge.innerText = "📁 Logger: Saved";
+                    badge.className = "badge";
+                }
+            });
+        }
+
         setInterval(() => {
             fetch('/data').then(r => r.json()).then(data => {
-                // Update ADC
                 data.adc.forEach((val, i) => {
                     const el = document.getElementById('adc-' + i);
                     if (el) el.innerText = val.toFixed(3) + 'V';
@@ -159,7 +184,6 @@ HTML_TEMPLATE = """
                     }
                 });
 
-                // Update DAC
                 data.dac.forEach((val, i) => {
                     const el = document.getElementById('dac-' + i);
                     if (el) el.innerText = val.toFixed(2) + 'V Out';
@@ -170,13 +194,11 @@ HTML_TEMPLATE = """
                     }
                 });
 
-                // Update Encoders
                 if (document.getElementById('enc-spin'))
                     document.getElementById('enc-spin').innerText = "Enc: " + data.enc.spin;
                 if (document.getElementById('enc-trolley'))
                     document.getElementById('enc-trolley').innerText = "Enc: " + data.enc.trolley;
 
-                // Update Joystick Indicator
                 const badge = document.getElementById('joyBadge');
                 if (!data.joy.enabled) {
                     badge.innerText = "🕹️ Joystick: Disabled";
@@ -195,7 +217,7 @@ HTML_TEMPLATE = """
 </html>
 """
 
-def create_app(controller):
+def create_app(controller, logger):
     app = Flask(__name__)
 
     @app.route('/')
@@ -246,5 +268,15 @@ def create_app(controller):
     def toggle_joy():
         controller.toggle_joystick(bool(request.json['enabled']))
         return jsonify(ok=True)
+
+    @app.route('/toggle_log', methods=['POST'])
+    def toggle_log():
+        should_log = bool(request.json['logging'])
+        if should_log:
+            db_path = logger.start()
+            return jsonify(logging=True, file=db_path)
+        else:
+            db_path = logger.stop()
+            return jsonify(logging=False, file=db_path)
 
     return app

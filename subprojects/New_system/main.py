@@ -2,6 +2,7 @@ import pigpio
 import config
 from hardware import FastCraneHardware, EncoderReader, MockHardware, MockEncoder
 from logic import CraneController
+from logger import CraneDataLogger
 from gui import create_app
 
 def main():
@@ -33,12 +34,15 @@ def main():
             )
         }
 
-    # Core logic coordinator
+    # Core motion and arbitration controller
     controller = CraneController(hw, encoders, is_sim=is_sim)
 
+    # SQLite data logging engine
+    logger = CraneDataLogger(controller)
+
     # Telemetry web server
-    app = create_app(controller)
-    print("🚀 Telemetry UI operational on http://0.0.0.0:5002")
+    app = create_app(controller, logger)
+    print("🚀 Telemetry & Logging UI operational on http://0.0.0.0:5002")
     app.run(host='0.0.0.0', port=5002, debug=False)
 
 if __name__ == '__main__':
