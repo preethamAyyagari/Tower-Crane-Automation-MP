@@ -11,8 +11,8 @@ HTML_TEMPLATE = """
     <style>
         body { font-family: 'Segoe UI', monospace; background: #1a1e24; color: #d2dae2; margin: 0; padding: 20px; }
         h1 { color: #ecf0f1; text-align: center; margin-bottom: 20px; }
-        .top-status { display: flex; justify-content: center; gap: 15px; align-items: center; margin-bottom: 20px; flex-wrap: wrap;}
-        .badge { padding: 8px 16px; border-radius: 6px; font-weight: bold; background: #2c3e50; }
+        .top-status { display: flex; justify-content: center; gap: 12px; align-items: center; margin-bottom: 20px; flex-wrap: wrap;}
+        .badge { padding: 8px 14px; border-radius: 6px; font-weight: bold; background: #2c3e50; font-size: 13px; }
         .badge.active { background: #20bf6b; color: white; }
         .badge.logging { background: #e84118; color: white; animation: blink 1.5s infinite; }
         @keyframes blink { 0% { opacity: 1; } 50% { opacity: 0.5; } 100% { opacity: 1; } }
@@ -35,16 +35,39 @@ HTML_TEMPLATE = """
         .btn-toggle { background: #3498db; color: white; }
         .btn-log-start { background: #e84118; color: white; }
         .btn-log-stop { background: #718093; color: white; }
+        .btn-servo-clear { background: #e67e22; color: white; font-size: 13px; }
+
+        .io-container { display: flex; flex-wrap: wrap; gap: 10px; justify-content: center; }
+        .io-pill { background: #1a1e24; border: 1px solid #3a4754; border-radius: 6px; padding: 6px 12px; font-size: 12px; display: flex; align-items: center; gap: 8px; font-weight: bold; }
+        .led-dot { width: 10px; height: 10px; border-radius: 50%; background: #485460; }
+        .led-dot.tripped { background: #eb3b5a; box-shadow: 0 0 8px #eb3b5a; }
+        .led-dot.ref-active { background: #00d2d3; box-shadow: 0 0 8px #00d2d3; }
+        .led-dot.pulse-active { background: #f39c12; box-shadow: 0 0 8px #f39c12; }
     </style>
 </head>
 <body>
-    <h1>Crane Telemetry & USB Monitor</h1>
+    <h1>Crane Telemetry & Control Dashboard</h1>
 
     <div class="top-status">
         <div id="joyBadge" class="badge">🕹️ Joystick: Ready</div>
         <button class="btn-toggle" onclick="toggleJoystick()">Toggle Joystick Auto-Control</button>
         <div id="logBadge" class="badge">📁 Logger: Idle</div>
         <button id="logBtn" class="btn-log-start" onclick="toggleLogging()">⏺ Start SQL Logging</button>
+        <button class="btn-servo-clear" onclick="triggerServoClear()">⚡ Clear Servo Error (1s Pulse)</button>
+    </div>
+
+    <div class="section-header">🚦 Digital Limit & Reference Switches (MCP23017)</div>
+    <div class="io-container">
+        <div class="io-pill"><span id="led-spin_cw" class="led-dot"></span> Spin CW Limit</div>
+        <div class="io-pill"><span id="led-spin_acw" class="led-dot"></span> Spin ACW Limit</div>
+        <div class="io-pill"><span id="led-spin_ref" class="led-dot"></span> Spin Reference</div>
+        <div class="io-pill"><span id="led-trolley_front" class="led-dot"></span> Trolley Front Limit</div>
+        <div class="io-pill"><span id="led-trolley_back" class="led-dot"></span> Trolley Back Limit</div>
+        <div class="io-pill"><span id="led-tilt_up" class="led-dot"></span> Tilt Up Limit</div>
+        <div class="io-pill"><span id="led-tilt_down" class="led-dot"></span> Tilt Down Limit</div>
+        <div class="io-pill"><span id="led-hook_up" class="led-dot"></span> Hook Up Limit</div>
+        <div class="io-pill"><span id="led-hook_down" class="led-dot"></span> Hook Down Limit</div>
+        <div class="io-pill"><span id="led-servo_err_clear" class="led-dot"></span> Servo Clear Output</div>
     </div>
 
     <div class="section-header">📡 Analog Sensor Readings (CN0554 AD7124)</div>
@@ -108,15 +131,10 @@ HTML_TEMPLATE = """
                     datasets: [{ data: Array(MAX_POINTS).fill(null), borderColor: borderColor, borderWidth: 2 }] 
                 },
                 options: {
-                    responsive: true, 
-                    maintainAspectRatio: false, 
-                    animation: false,
+                    responsive: true, maintainAspectRatio: false, animation: false,
                     plugins: { legend: { display: false } },
                     scales: { 
-                        y: { 
-                            grid: { color: 'rgba(255, 255, 255, 0.08)' },
-                            ticks: { color: '#aaa', font: { size: 10 } }
-                        }, 
+                        y: { grid: { color: 'rgba(255, 255, 255, 0.08)' }, ticks: { color: '#aaa', font: { size: 10 } } }, 
                         x: { display: false } 
                     },
                     elements: { point: { radius: 0 } }
@@ -149,6 +167,10 @@ HTML_TEMPLATE = """
             post('/toggle_joy', {enabled: joyEnabled});
         }
 
+        function triggerServoClear() {
+            post('/servo_clear', {});
+        }
+
         function toggleLogging() {
             isLoggingActive = !isLoggingActive;
             fetch('/toggle_log', {
@@ -174,31 +196,55 @@ HTML_TEMPLATE = """
 
         setInterval(() => {
             fetch('/data').then(r => r.json()).then(data => {
-                data.adc.forEach((val, i) => {
-                    const el = document.getElementById('adc-' + i);
+                // Update only present ADC cards
+                Object.keys(adcCharts).forEach(i => {
+                    const idx = parseInt(i);
+                    const val = data.adc[idx] !== undefined ? data.adc[idx] : 0.0;
+                    const el = document.getElementById('adc-' + idx);
                     if (el) el.innerText = val.toFixed(3) + 'V';
-                    if (adcCharts[i]) {
-                        adcCharts[i].data.datasets[0].data.shift();
-                        adcCharts[i].data.datasets[0].data.push(val);
-                        adcCharts[i].update();
+                    if (adcCharts[idx]) {
+                        adcCharts[idx].data.datasets[0].data.shift();
+                        adcCharts[idx].data.datasets[0].data.push(val);
+                        adcCharts[idx].update();
                     }
                 });
 
-                data.dac.forEach((val, i) => {
-                    const el = document.getElementById('dac-' + i);
+                // Update only present DAC cards
+                Object.keys(dacCharts).forEach(i => {
+                    const idx = parseInt(i);
+                    const val = data.dac[idx] !== undefined ? data.dac[idx] : 0.0;
+                    const el = document.getElementById('dac-' + idx);
                     if (el) el.innerText = val.toFixed(2) + 'V Out';
-                    if (dacCharts[i]) {
-                        dacCharts[i].data.datasets[0].data.shift();
-                        dacCharts[i].data.datasets[0].data.push(val);
-                        dacCharts[i].update();
+                    if (dacCharts[idx]) {
+                        dacCharts[idx].data.datasets[0].data.shift();
+                        dacCharts[idx].data.datasets[0].data.push(val);
+                        dacCharts[idx].update();
                     }
                 });
 
+                // Update Encoders
                 if (document.getElementById('enc-spin'))
                     document.getElementById('enc-spin').innerText = "Enc: " + data.enc.spin;
                 if (document.getElementById('enc-trolley'))
                     document.getElementById('enc-trolley').innerText = "Enc: " + data.enc.trolley;
 
+                // Update MCP23017 Digital Indicators
+                if (data.limits) {
+                    for (const [key, val] of Object.entries(data.limits)) {
+                        const led = document.getElementById('led-' + key);
+                        if (led) {
+                            if (key === 'spin_ref') {
+                                led.className = val ? "led-dot ref-active" : "led-dot";
+                            } else if (key === 'servo_err_clear') {
+                                led.className = val ? "led-dot pulse-active" : "led-dot";
+                            } else {
+                                led.className = val ? "led-dot tripped" : "led-dot";
+                            }
+                        }
+                    }
+                }
+
+                // Update Joystick Indicator
                 const badge = document.getElementById('joyBadge');
                 if (!data.joy.enabled) {
                     badge.innerText = "🕹️ Joystick: Disabled";
@@ -223,18 +269,18 @@ def create_app(controller, logger):
     @app.route('/')
     def index():
         adc_map = [
-            (config.ADC_CH_JOYSTICK_X, 'Joystick X (Spin)'),
-            (config.ADC_CH_JOYSTICK_Y, 'Joystick Y (Trolley)'),
-            (config.ADC_CH_HOOK_SENSOR, 'Hook Sensor'),
-            (config.ADC_CH_TILT_SENSOR, 'Tilt Sensor'),
             (config.ADC_CH_SWING_ALPHA, 'Alpha Swing Sensor'),
-            (config.ADC_CH_SWING_BETA,  'Beta Swing Sensor')
+            (config.ADC_CH_SWING_BETA,  'Beta Swing Sensor'),
+            (config.ADC_CH_JOYSTICK_X,  'Joystick X (Spin)'),
+            (config.ADC_CH_JOYSTICK_Y,  'Joystick Y (Trolley)'),
+            (config.ADC_CH_HOOK_SENSOR, 'Hook Sensor'),
+            (config.ADC_CH_TILT_SENSOR, 'Tilt Sensor')
         ]
         dac_map = [
-            (config.DAC_CH_SPIN, 'Spin Motor', True, 'spin'),
-            (config.DAC_CH_TROLLEY, 'Trolley Motor', True, 'trolley'),
-            (config.DAC_CH_HOOK, 'Hook Motor (Open-Loop)', False, 'hook'),
-            (config.DAC_CH_TILT, 'Tilt Motor (Open-Loop)', False, 'tilt')
+            (config.DAC_CH_TILT,    'Tilt Motor (Open-Loop)', False, 'tilt'),
+            (config.DAC_CH_TROLLEY, 'Trolley Motor',          True,  'trolley'),
+            (config.DAC_CH_HOOK,    'Hook Motor (Open-Loop)', False, 'hook'),
+            (config.DAC_CH_SPIN,    'Spin Motor',             True,  'spin')
         ]
         return render_template_string(HTML_TEMPLATE, adc_channels=adc_map, dac_channels=dac_map)
 
@@ -267,6 +313,11 @@ def create_app(controller, logger):
     @app.route('/toggle_joy', methods=['POST'])
     def toggle_joy():
         controller.toggle_joystick(bool(request.json['enabled']))
+        return jsonify(ok=True)
+
+    @app.route('/servo_clear', methods=['POST'])
+    def servo_clear():
+        controller.pulse_servo_error_clear()
         return jsonify(ok=True)
 
     @app.route('/toggle_log', methods=['POST'])
